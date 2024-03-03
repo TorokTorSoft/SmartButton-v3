@@ -1,0 +1,157 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <EEPROM.h>
+
+// Pin configuration
+const int ledPin = 2;
+// Variables for blinking logic
+unsigned long blinkStartTime;
+bool blinking = false;
+bool once = true;
+const int blinkDuration = 2000; // Duration for which the LED should blink
+const int blinkInterval = 100; // Interval for blinking
+ int resetCount;
+// EEPROM configuration
+const int EEPROM_SIZE = 512;
+const int RESET_COUNT_ADDR = 10; // Starting address for resetCount
+const int LAST_CELL_ADDR = 20; // Address for the last used cell of resetCount
+const int MAX_RESET_COUNT = 5; // Maximum number of resets
+const int NUM_RESET_CELLS = 10; // Number of cells for resetCount
+
+// Web server setup
+ESP8266WebServer server(80);
+bool webServerRunning = false;
+
+void setup() {
+  pinMode(ledPin, OUTPUT);
+  Serial.begin(9600);
+  EEPROM.begin(EEPROM_SIZE);
+
+   resetCount = readResetCount();
+  Serial.print("Number of quick restarts: ");
+  Serial.println(resetCount);
+
+  // Blink and reset count logic
+  if (resetCount < MAX_RESET_COUNT) {
+    blinking = true;
+    blinkStartTime = millis();
+    writeResetCount(resetCount + 1);
+  } else if (resetCount >= MAX_RESET_COUNT) {
+    
+    Serial.println("Executing special code!");
+  
+    writeResetCount(0);
+  
+    // Start the web server for configuration
+    startWebServer();
+  }
+}
+
+void loop() {
+  // Handle LED blinking
+  if (blinking && (millis() - blinkStartTime < blinkDuration)) {
+   
+   
+    if ((millis() - blinkStartTime) % blinkInterval < (blinkInterval / 2)) {
+      digitalWrite(ledPin, LOW);
+    } else {
+      digitalWrite(ledPin, HIGH);
+    }
+  } else {
+     if(once){
+      writeResetCount(0);
+        once=false;
+   
+    blinking = false;
+    digitalWrite(ledPin, LOW); }
+  }
+
+  // Handle web server if running
+  if (webServerRunning) {
+    server.handleClient();
+  }
+
+/*
+ String url = readEEPROM(64, 96); // Assuming maximum URL length is 96 characters
+    Serial.print("URL read from EEPROM: ");
+    Serial.println(url);
+*/
+//deepsleap
+//ESP.deepSleep(0);
+}
+
+// Starts the web server and defines routes
+void startWebServer() {
+  WiFi.softAP("ESP01S-Setup", "12345678");
+  server.on("/", handleRoot);
+  server.on("/setup", handleSetup);
+  server.begin();
+  webServerRunning = true;
+  Serial.println("ESP01S AP started");
+}
+
+// Route for the root ("/") path
+void handleRoot() {
+  String html = "<html><body><h1>WiFi Setup</h1>"
+                "<form action='/setup' method='POST'>"
+                "WiFi SSID: <input type='text' name='ssid'><br>"
+                "Password: <input type='password' name='password'><br>"
+                "URL: <input type='text' name='url'><br>"
+                "<input type='submit' value='Set'>"
+                "</form></body></html>";
+  server.send(200, "text/html", html);
+}
+
+// Route for handling setup ("/setup") path
+void handleSetup() {
+  String ssid = server.arg("ssid");
+  String password = server.arg("password");
+  String url = server.arg("url");
+
+  // Store the configuration in EEPROM
+  writeEEPROM(0, ssid);
+  writeEEPROM(32, password);
+  writeEEPROM(64, url);
+  EEPROM.commit();
+ Serial.println(url);
+  server.send(200, "text/html", "<h1>Settings updated. Please restart ESP01S.</h1>");
+}
+
+// Reads the reset count from EEPROM
+int readResetCount() {
+  int lastCell = EEPROM.read(LAST_CELL_ADDR);
+  if (lastCell == 255 || lastCell >= NUM_RESET_CELLS) lastCell = 0;
+  return EEPROM.read(RESET_COUNT_ADDR + lastCell);
+}
+
+// Writes the reset count to EEPROM
+void writeResetCount(int value) {
+  int lastCell = EEPROM.read(LAST_CELL_ADDR);
+  if (lastCell == 255 || lastCell >= NUM_RESET_CELLS) lastCell = -1;
+
+  int nextCell = (lastCell + 1) % NUM_RESET_CELLS;
+  EEPROM.write(RESET_COUNT_ADDR + nextCell, value);
+  EEPROM.write(LAST_CELL_ADDR, nextCell);
+  EEPROM.commit();
+}
+
+// Writes data to EEPROM starting from a specific address
+void writeEEPROM(int start, String data) {
+  for (int i = 0; i < data.length(); i++) {
+    EEPROM.write(start + i, data[i]);
+  }
+  EEPROM.write(start + data.length(), 0); // Null terminator
+}
+
+// Reads data from EEPROM starting from a specific address
+String readEEPROM(int start, int len) {
+  String str = "";
+  for (int i = start; i < start + len; i++) {
+    char c = EEPROM.read(i);
+    if (c == 0) {
+      break;
+    }
+    str += c;
+  }
+  return str;
+}
